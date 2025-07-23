@@ -110,6 +110,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Render
+.render-buildlogs
+
 # Spyder project settings
 .spyderproject
 .spyproject

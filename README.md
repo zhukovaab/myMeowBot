@@ -38,52 +38,49 @@ BOT_TOKEN=your_telegram_bot_token_here
 python bot.py
 ```
 
-## Деплой на Fly.io
+## Деплой на Render
 
 ### Подготовка
 
-1. Установите Fly CLI:
-```bash
-# macOS
-brew install flyctl
-
-# Linux
-curl -L https://fly.io/install.sh | sh
-```
-
-2. Войдите в аккаунт Fly.io:
-```bash
-fly auth login
-```
+1. Создайте аккаунт на [Render.com](https://render.com)
+2. Подключите ваш GitHub/GitLab репозиторий
 
 ### Деплой
 
-1. Создайте приложение на Fly.io:
-```bash
-fly apps create my-meow-bot
-```
+#### Способ 1: Через render.yaml (рекомендуется)
 
-2. Установите секрет с токеном бота:
-```bash
-fly secrets set BOT_TOKEN=your_telegram_bot_token_here
-```
+1. Убедитесь, что файл `render.yaml` находится в корне проекта
+2. Загрузите код в Git репозиторий
+3. В Render Dashboard:
+   - Нажмите "New +" → "Blueprint"
+   - Подключите ваш репозиторий
+   - Render автоматически создаст сервис на основе `render.yaml`
 
-3. Разверните приложение:
-```bash
-fly deploy
-```
+#### Способ 2: Ручное создание
 
-4. Проверьте статус:
-```bash
-fly status
-```
+1. В Render Dashboard нажмите "New +" → "Web Service"
+2. Подключите ваш Git репозиторий
+3. Настройте параметры:
+   - **Name**: `my-meow-bot`
+   - **Environment**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python bot.py`
+   - **Plan**: `Free`
+
+4. В разделе "Environment Variables" добавьте:
+   - **Key**: `BOT_TOKEN`
+   - **Value**: ваш токен Telegram бота
+
+5. Нажмите "Create Web Service"
 
 ### Обновление
 
-Для обновления бота просто выполните:
-```bash
-fly deploy
-```
+При каждом push в репозиторий Render автоматически пересоберет и перезапустит приложение.
+
+### Мониторинг
+
+- Логи доступны в разделе "Logs" вашего сервиса
+- Статус деплоя отображается в разделе "Events"
 
 ## Получение токена бота
 
