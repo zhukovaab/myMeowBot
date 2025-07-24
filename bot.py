@@ -20,15 +20,11 @@ def setup_logging():
     """Настройка логирования для серверного окружения"""
     log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     
-    # Создаем папку для логов если её нет
-    os.makedirs('logs', exist_ok=True)
-    
-    # Настраиваем логирование в файл и консоль
+    # Настраиваем логирование только в консоль
     logging.basicConfig(
         level=logging.INFO,
         format=log_format,
         handlers=[
-            logging.FileHandler(f'logs/bot_{datetime.now().strftime("%Y%m%d")}.log'),
             logging.StreamHandler(sys.stdout)
         ]
     )
