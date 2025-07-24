@@ -4,10 +4,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=YOUR_USERNAME
-WorkingDirectory=/path/to/your/my-meow-bot
-Environment=PATH=/path/to/your/my-meow-bot/venv/bin
-ExecStart=/path/to/your/my-meow-bot/venv/bin/python bot.py
+User=root
+WorkingDirectory=/root/myMeowBot
+Environment=PATH=/root/myMeowBot/venv/bin
+ExecStart=/root/myMeowBot/venv/bin/python bot.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -18,7 +18,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/path/to/your/my-meow-bot/logs
+ReadWritePaths=/root/myMeowBot/logs
 
 [Install]
 WantedBy=multi-user.target 
