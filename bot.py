@@ -48,7 +48,6 @@ async def meow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             # Отправляем картинку
             await update.message.reply_photo(
                 photo=image_url,
-                caption="Вот ваша кошечка! 😸"
             )
             
             # Удаляем сообщение о загрузке
