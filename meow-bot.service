@@ -1,0 +1,24 @@
+[Unit]
+Description=Meow Bot Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/your/my-meow-bot
+Environment=PATH=/path/to/your/my-meow-bot/venv/bin
+ExecStart=/path/to/your/my-meow-bot/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Настройки безопасности
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/path/to/your/my-meow-bot/logs
+
+[Install]
+WantedBy=multi-user.target 
