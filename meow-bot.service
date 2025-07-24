@@ -7,7 +7,7 @@ Type=simple
 User=root
 WorkingDirectory=/root/myMeowBot
 Environment=PATH=/root/myMeowBot/venv/bin
-ExecStart=/root/myMeowBot/venv/bin/python bot.py
+ExecStart=/root/myMeowBot/venv/bin/python3 bot.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
