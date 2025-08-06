@@ -5,10 +5,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/myMeowBot
 Environment=PATH=/root/myMeowBot/venv/bin:/usr/bin:/usr/local/bin
 EnvironmentFile=/root/myMeowBot/.env
-ExecStart=/bin/bash -c "source /root/myMeowBot/venv/bin/activate && python3 /root/myMeowBot/bot.py"
+ExecStart=/bin/bash -c "cd /root/myMeowBot && source /root/myMeowBot/venv/bin/activate && python3 /root/myMeowBot/bot.py"
 Restart=always
 RestartSec=10
 StandardOutput=journal
