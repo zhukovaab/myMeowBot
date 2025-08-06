@@ -6,9 +6,9 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/root/myMeowBot
-Environment=PATH=/root/myMeowBot/venv/bin
+Environment=PATH=/root/myMeowBot/venv/bin:/usr/bin:/usr/local/bin
 EnvironmentFile=/root/myMeowBot/.env
-ExecStart=/root/myMeowBot/venv/bin/python3 bot.py
+ExecStart=/root/myMeowBot/venv/bin/python3 /root/myMeowBot/bot.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
