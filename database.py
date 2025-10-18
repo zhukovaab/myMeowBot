@@ -29,9 +29,6 @@ class MeetingDatabase:
                     )
                 ''')
                 
-                # Проверяем и добавляем новые колонки если их нет
-                self._migrate_database(cursor)
-                
                 # Создаем таблицу пользовательских настроек
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS user_settings (
@@ -42,6 +39,9 @@ class MeetingDatabase:
                         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
+                
+                # Проверяем и добавляем новые колонки если их нет
+                self._migrate_database(cursor)
                 
                 conn.commit()
                 logger.info("База данных встреч инициализирована")
