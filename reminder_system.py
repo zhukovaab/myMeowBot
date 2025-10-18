@@ -3,6 +3,7 @@ import logging
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
+import pytz
 from telegram import Bot
 from telegram.error import TelegramError
 from database import MeetingDatabase
@@ -56,6 +57,9 @@ class ReminderSystem:
             # Получаем всех пользователей, у которых есть встречи
             users_with_meetings = self.db.get_all_users_with_meetings()
             
+            # Текущее время в UTC (так как встречи сохранены в UTC)
+            now_utc = datetime.utcnow()
+            
             # Проверяем каждого пользователя с его индивидуальными настройками
             for user_id in users_with_meetings:
                 user_reminder_minutes = self.db.get_user_reminder_minutes(user_id)
@@ -64,17 +68,23 @@ class ReminderSystem:
                 meetings_for_reminder = self.db.get_meetings_for_reminder(user_id, user_reminder_minutes)
                 
                 for meeting in meetings_for_reminder:
-                    # Создаем уникальный ключ для напоминания
-                    reminder_key = f"{meeting['id']}_{meeting['meeting_time']}_{user_reminder_minutes}"
+                    # Время встречи в UTC
+                    meeting_time_utc = datetime.fromisoformat(meeting['meeting_time'])
+                    reminder_time_utc = meeting_time_utc - timedelta(minutes=user_reminder_minutes)
                     
-                    # Проверяем, не отправляли ли уже это напоминание
-                    if reminder_key not in self.sent_reminders:
-                        await self._send_reminder(meeting, user_reminder_minutes)
-                        self.sent_reminders.add(reminder_key)
+                    # Проверяем, нужно ли отправить напоминание сейчас
+                    if now_utc >= reminder_time_utc and now_utc < meeting_time_utc:
+                        # Создаем уникальный ключ для напоминания
+                        reminder_key = f"{meeting['id']}_{meeting['meeting_time']}_{user_reminder_minutes}"
                         
-                        # Очищаем старые записи (старше 2 часов)
-                        if len(self.sent_reminders) > 1000:
-                            self.sent_reminders.clear()
+                        # Проверяем, не отправляли ли уже это напоминание
+                        if reminder_key not in self.sent_reminders:
+                            await self._send_reminder(meeting, user_reminder_minutes)
+                            self.sent_reminders.add(reminder_key)
+                            
+                            # Очищаем старые записи (старше 2 часов)
+                            if len(self.sent_reminders) > 1000:
+                                self.sent_reminders.clear()
             
             # Обрабатываем регулярные встречи (каждые 5 минут)
             if not hasattr(self, '_last_recurring_check'):
@@ -138,10 +148,23 @@ class ReminderSystem:
             user_id = meeting['user_id']
             title = meeting['title']
             description = meeting['description']
-            meeting_time = datetime.fromisoformat(meeting['meeting_time'])
             
-            # Форматируем время
-            time_str = meeting_time.strftime("%H:%M")
+            # Время встречи в UTC
+            meeting_time_utc = datetime.fromisoformat(meeting['meeting_time'])
+            
+            # Получаем часовой пояс пользователя и конвертируем время
+            user_timezone = self.db.get_user_timezone(user_id)
+            try:
+                tz = pytz.timezone(user_timezone)
+                # Конвертируем UTC время в часовой пояс пользователя
+                meeting_time_user = pytz.utc.localize(meeting_time_utc).astimezone(tz)
+            except pytz.UnknownTimeZoneError:
+                # Fallback на московское время
+                tz = pytz.timezone('Europe/Moscow')
+                meeting_time_user = pytz.utc.localize(meeting_time_utc).astimezone(tz)
+            
+            # Форматируем время в часовом поясе пользователя
+            time_str = meeting_time_user.strftime("%H:%M")
             
             # Создаем текст напоминания
             reminder_text = f"🔔 {title}!\n\n"

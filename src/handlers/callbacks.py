@@ -4,13 +4,14 @@ import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from ..utils.helpers import format_meeting_time_for_user
 
 logger = logging.getLogger(__name__)
 
 
 async def add_meeting_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка callback для начала добавления встречи"""
-    from ..constants import WAITING_TITLE
+    from ..constants import WAITING_TITLE, RECURRING_WAITING_TITLE
     
     query = update.callback_query
     await query.answer()
@@ -23,13 +24,13 @@ async def add_meeting_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             "📝 Добавление новой встречи\n\n"
             "Введите название встречи:"
         )
+        return WAITING_TITLE
     elif query.data == "add_recurring":
         await query.edit_message_text(
             "🔄 Добавление регулярной встречи\n\n"
             "Введите название встречи:"
         )
-    
-    return WAITING_TITLE
+        return RECURRING_WAITING_TITLE
 
 
 async def delete_meeting_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -124,13 +125,13 @@ async def show_meetings_for_action(query, user_id: int, action: str, title: str)
             )
             return
         
-        # Сортируем встречи по времени
-        now = datetime.now()
+        # Сортируем встречи по времени (сравниваем в UTC)
+        now_utc = datetime.utcnow()
         upcoming = []
         
         for meeting in meetings:
             meeting_time = datetime.fromisoformat(meeting['meeting_time'])
-            if meeting_time > now:
+            if meeting_time > now_utc:
                 upcoming.append((meeting, meeting_time))
         
         upcoming.sort(key=lambda x: x[1])
@@ -150,10 +151,19 @@ async def show_meetings_for_action(query, user_id: int, action: str, title: str)
         text = f"{title}\n\n"
         keyboard = []
         
+        # Получаем часовой пояс пользователя
+        user_timezone = db.get_user_timezone(user_id)
+        
         for meeting, meeting_time in upcoming[:10]:  # Показываем максимум 10 встреч
             meeting_id = meeting['id']
             title_short = meeting['title'][:25] + "..." if len(meeting['title']) > 25 else meeting['title']
-            time_str = meeting_time.strftime("%d.%m в %H:%M")
+            # Для кнопок используем короткий формат без года (если текущий год)
+            time_display = format_meeting_time_for_user(meeting_time, user_timezone)
+            current_year = str(datetime.now().year)
+            if f".{current_year}" in time_display:
+                time_str = time_display.replace(f".{current_year}", "")
+            else:
+                time_str = time_display
             
             # Добавляем иконку для регулярных встреч
             icon = "🔄" if meeting.get('is_recurring') else "📅"
@@ -197,22 +207,25 @@ async def show_main_meetings_list(update_or_query, user_id: int):
             response = "📭 У вас пока нет встреч.\n\n"
             response += "Используйте кнопку ниже, чтобы добавить первую встречу!"
         else:
-            # Сортируем встречи по времени
-            now = datetime.now()
+            # Сортируем встречи по времени (сравниваем в UTC)
+            now_utc = datetime.utcnow()
             upcoming = []
             
             for meeting in meetings:
                 meeting_time = datetime.fromisoformat(meeting['meeting_time'])
-                if meeting_time > now:
+                # Предстоящие встречи: будущие встречи ИЛИ регулярные встречи (которые автоматически обновляются)
+                if meeting_time > now_utc or meeting.get('is_recurring'):
                     upcoming.append((meeting, meeting_time))
             
             upcoming.sort(key=lambda x: x[1])
             
             # Разделяем встречи на прошедшие и предстоящие
+            # Регулярные встречи не попадают в прошедшие, так как они автоматически обновляются
             past = []
             for meeting in meetings:
                 meeting_time = datetime.fromisoformat(meeting['meeting_time'])
-                if meeting_time <= now:
+                # Только обычные встречи могут быть прошедшими
+                if meeting_time <= now_utc and not meeting.get('is_recurring'):
                     past.append((meeting, meeting_time))
             
             response = "📅 **Ваши встречи:**\n\n"
@@ -220,8 +233,11 @@ async def show_main_meetings_list(update_or_query, user_id: int):
             # Предстоящие встречи
             if upcoming:
                 response += "🔜 **Предстоящие:**\n"
+                # Получаем часовой пояс пользователя
+                user_timezone = db.get_user_timezone(user_id)
+                
                 for meeting, meeting_time in upcoming:
-                    time_str = meeting_time.strftime("%d.%m.%Y в %H:%M")
+                    time_str = format_meeting_time_for_user(meeting_time, user_timezone)
                     
                     # Иконка для регулярных встреч
                     icon = "🔄" if meeting.get('is_recurring') else "📅"

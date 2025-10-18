@@ -37,6 +37,7 @@ class MeetingDatabase:
                     CREATE TABLE IF NOT EXISTS user_settings (
                         user_id INTEGER PRIMARY KEY,
                         reminder_minutes INTEGER DEFAULT 2,
+                        timezone TEXT DEFAULT 'Europe/Moscow',
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
@@ -50,7 +51,7 @@ class MeetingDatabase:
     
     def _migrate_database(self, cursor):
         """Миграция базы данных для добавления новых колонок"""
-        # Получаем список существующих колонок
+        # Получаем список существующих колонок в meetings
         cursor.execute("PRAGMA table_info(meetings)")
         existing_columns = [column[1] for column in cursor.fetchall()]
         
@@ -63,7 +64,7 @@ class MeetingDatabase:
             ("recurrence_end_date", "DATETIME")
         ]
         
-        # Добавляем отсутствующие колонки
+        # Добавляем отсутствующие колонки в meetings
         for column_name, column_definition in new_columns:
             if column_name not in existing_columns:
                 try:
@@ -72,6 +73,18 @@ class MeetingDatabase:
                 except sqlite3.Error as e:
                     logger.error(f"Ошибка добавления колонки {column_name}: {e}")
                     raise
+        
+        # Миграция для user_settings - добавляем timezone если его нет
+        try:
+            cursor.execute("PRAGMA table_info(user_settings)")
+            settings_columns = [column[1] for column in cursor.fetchall()]
+            
+            if "timezone" not in settings_columns:
+                cursor.execute("ALTER TABLE user_settings ADD COLUMN timezone TEXT DEFAULT 'Europe/Moscow'")
+                logger.info("Добавлена колонка timezone в таблицу user_settings")
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка миграции user_settings: {e}")
+            raise
     
     def add_meeting(self, user_id: int, title: str, description: str, meeting_time: datetime, 
                    is_recurring: bool = False, recurrence_type: str = None, 
@@ -161,12 +174,15 @@ class MeetingDatabase:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 
-                # Получаем все встречи, которые начнутся в течение следующих minutes_ahead минут
+                # Получаем все встречи, которые начнутся в течение следующих minutes_ahead минут (UTC)
+                current_utc = datetime.utcnow()
+                future_utc = (current_utc + timedelta(minutes=minutes_ahead)).strftime('%Y-%m-%d %H:%M:%S')
+                current_utc_str = current_utc.strftime('%Y-%m-%d %H:%M:%S')
+                
                 cursor.execute('''
                     SELECT * FROM meetings 
-                    WHERE meeting_time > datetime('now', 'localtime')
-                    AND meeting_time <= datetime('now', 'localtime', '+{} minutes')
-                '''.format(minutes_ahead))
+                    WHERE meeting_time > ? AND meeting_time <= ?
+                ''', (current_utc_str, future_utc))
                 
                 meetings = [dict(row) for row in cursor.fetchall()]
                 return meetings
@@ -176,19 +192,19 @@ class MeetingDatabase:
             return []
     
     def get_meetings_for_reminder(self, user_id: int, reminder_minutes: int) -> List[Dict[str, Any]]:
-        """Получение встреч пользователя, для которых нужно отправить напоминание"""
+        """Получение всех будущих встреч пользователя (проверка времени напоминания делается в reminder_system)"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 
-                # Получаем встречи, которые начнутся через reminder_minutes (±30 секунд для точности)
+                # Получаем все будущие встречи пользователя (проверку времени делаем в reminder_system)
+                current_utc = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                 cursor.execute('''
                     SELECT * FROM meetings 
-                    WHERE user_id = ?
-                    AND datetime(meeting_time, '-{} minutes') <= datetime('now', 'localtime')
-                    AND datetime(meeting_time, '-{} minutes', '+30 seconds') >= datetime('now', 'localtime')
-                '''.format(reminder_minutes, reminder_minutes), (user_id,))
+                    WHERE user_id = ? AND meeting_time > ?
+                    ORDER BY meeting_time
+                ''', (user_id, current_utc))
                 
                 meetings = [dict(row) for row in cursor.fetchall()]
                 return meetings
@@ -202,11 +218,13 @@ class MeetingDatabase:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                # Используем UTC время, так как встречи теперь сохранены в UTC
+                current_utc = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                 cursor.execute('''
                     DELETE FROM meetings 
-                    WHERE meeting_time < datetime('now', 'localtime')
+                    WHERE meeting_time < ?
                     AND (is_recurring = 0 OR is_recurring IS NULL)
-                ''')
+                ''', (current_utc,))
                 deleted_count = cursor.rowcount
                 conn.commit()
                 
@@ -250,26 +268,55 @@ class MeetingDatabase:
             logger.error(f"Ошибка при обновлении настроек пользователя {user_id}: {e}")
             return False
     
+    def get_user_timezone(self, user_id: int) -> str:
+        """Получение часового пояса пользователя"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT timezone FROM user_settings WHERE user_id = ?", (user_id,))
+                result = cursor.fetchone()
+                return result[0] if result else 'Europe/Moscow'
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка при получении часового пояса пользователя {user_id}: {e}")
+            return 'Europe/Moscow'
+    
+    def set_user_timezone(self, user_id: int, timezone: str) -> bool:
+        """Установка часового пояса для пользователя"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO user_settings (user_id, timezone, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                ''', (user_id, timezone))
+                conn.commit()
+                logger.info(f"Часовой пояс пользователя {user_id} обновлен: {timezone}")
+                return True
+        except sqlite3.Error as e:
+            logger.error(f"Ошибка при обновлении часового пояса пользователя {user_id}: {e}")
+            return False
+    
     def get_user_settings(self, user_id: int) -> Dict[str, Any]:
         """Получение всех настроек пользователя"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT reminder_minutes, created_at, updated_at FROM user_settings WHERE user_id = ?",
+                    "SELECT reminder_minutes, timezone, created_at, updated_at FROM user_settings WHERE user_id = ?",
                     (user_id,)
                 )
                 result = cursor.fetchone()
                 if result:
                     return {
                         'reminder_minutes': result[0],
-                        'created_at': result[1],
-                        'updated_at': result[2]
+                        'timezone': result[1] or 'Europe/Moscow',
+                        'created_at': result[2],
+                        'updated_at': result[3]
                     }
                 else:
                     # Создаем настройки по умолчанию
                     self.set_user_reminder_minutes(user_id, 2)
-                    return {'reminder_minutes': 2, 'created_at': None, 'updated_at': None}
+                    return {'reminder_minutes': 2, 'timezone': 'Europe/Moscow', 'created_at': None, 'updated_at': None}
         except sqlite3.Error as e:
             logger.error(f"Ошибка при получении настроек пользователя {user_id}: {e}")
             return {'reminder_minutes': 2, 'created_at': None, 'updated_at': None}
@@ -279,8 +326,10 @@ class MeetingDatabase:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                # Получаем пользователей с будущими встречами (UTC)
+                current_utc = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                 cursor.execute(
-                    "SELECT DISTINCT user_id FROM meetings WHERE meeting_time > datetime('now', 'localtime')"
+                    "SELECT DISTINCT user_id FROM meetings WHERE meeting_time > ?", (current_utc,)
                 )
                 users = [row[0] for row in cursor.fetchall()]
                 return users
@@ -294,12 +343,15 @@ class MeetingDatabase:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
+                
+                # Используем UTC время, так как встречи теперь сохранены в UTC
+                current_utc = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
                 cursor.execute('''
                     SELECT * FROM meetings 
                     WHERE is_recurring = 1 
-                    AND meeting_time < datetime('now', 'localtime')
-                    AND (recurrence_end_date IS NULL OR recurrence_end_date > datetime('now', 'localtime'))
-                ''')
+                    AND meeting_time < ?
+                    AND (recurrence_end_date IS NULL OR recurrence_end_date > ?)
+                ''', (current_utc, current_utc))
                 
                 meetings = [dict(row) for row in cursor.fetchall()]
                 return meetings
@@ -332,7 +384,16 @@ class MeetingDatabase:
                 next_time = current_time + timedelta(days=30 * interval)
             elif recurrence_type == 'weekdays':
                 # Только по будням (пн-пт)
-                next_time = self._find_next_weekday(current_time)
+                # Если текущее время уже на выходном, найти следующий рабочий день
+                if current_time.weekday() >= 5:  # суббота или воскресенье
+                    # Найти следующий понедельник
+                    from datetime import timedelta
+                    days_until_monday = (7 - current_time.weekday()) % 7
+                    if days_until_monday == 0:  # если сегодня воскресенье
+                        days_until_monday = 1
+                    next_time = current_time + timedelta(days=days_until_monday)
+                else:
+                    next_time = self._find_next_weekday(current_time)
             elif recurrence_type == 'custom_weekdays' and weekdays:
                 # По определенным дням недели
                 next_time = self._find_next_custom_weekday(current_time, weekdays)

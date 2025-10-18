@@ -3,6 +3,7 @@
 import re
 from datetime import datetime, timedelta
 from typing import Optional
+import pytz
 
 from ..constants import WEEKDAY_NAMES
 
@@ -17,16 +18,43 @@ def format_reminder_time(minutes: int) -> str:
         return f"{minutes} минут"
 
 
-def parse_datetime(date_str: str) -> datetime:
-    """Парсинг строки с датой и временем"""
+def format_meeting_time_for_user(meeting_time_utc: datetime, user_timezone: str = 'Europe/Moscow') -> str:
+    """Форматирует время встречи в часовом поясе пользователя"""
+    try:
+        tz = pytz.timezone(user_timezone)
+        # Конвертируем UTC время в часовой пояс пользователя
+        if isinstance(meeting_time_utc, str):
+            meeting_time_utc = datetime.fromisoformat(meeting_time_utc)
+        
+        # Локализуем UTC время и конвертируем в часовой пояс пользователя
+        utc_time = pytz.utc.localize(meeting_time_utc)
+        local_time = utc_time.astimezone(tz)
+        
+        return local_time.strftime("%d.%m.%Y в %H:%M")
+    except (pytz.UnknownTimeZoneError, ValueError):
+        # Fallback на UTC отображение
+        if isinstance(meeting_time_utc, str):
+            meeting_time_utc = datetime.fromisoformat(meeting_time_utc)
+        return meeting_time_utc.strftime("%d.%m.%Y в %H:%M")
+
+
+def parse_datetime(date_str: str, user_timezone: str = 'Europe/Moscow') -> datetime:
+    """Парсинг строки с датой и временем с учетом часового пояса пользователя"""
     # Убираем лишние пробелы
     date_str = date_str.strip()
+    
+    # Получаем часовой пояс пользователя
+    try:
+        tz = pytz.timezone(user_timezone)
+    except pytz.UnknownTimeZoneError:
+        tz = pytz.timezone('Europe/Moscow')  # Fallback
     
     # Предварительная обработка: заменяем пробел между цифрами времени на двоеточие
     # Паттерн для времени через пробел: цифры пробел цифры (в конце строки или перед пробелом)
     import re
     # Заменяем "15 30" на "15:30", "завтра 15 30" на "завтра 15:30" и т.д.
-    date_str = re.sub(r'(\d{1,2})\s+(\d{1,2})(?=\s|$)', r'\1:\2', date_str)
+    # Ищем последнюю пару цифр через пробел (это время)
+    date_str = re.sub(r'(\d{1,2})\s+(\d{1,2})(?=\s*$)', r'\1:\2', date_str)
     
     # Паттерны для разных форматов
     patterns = [
@@ -53,27 +81,40 @@ def parse_datetime(date_str: str) -> datetime:
         if match:
             try:
                 if fmt == 'tomorrow %H:%M':
-                    # Завтра
+                    # Завтра в часовом поясе пользователя
                     hour, minute = map(int, match.groups())
-                    tomorrow = datetime.now() + timedelta(days=1)
-                    return tomorrow.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    # Получаем текущее время в часовом поясе пользователя
+                    now_user_tz = datetime.now(tz)
+                    tomorrow = now_user_tz + timedelta(days=1)
+                    result = tomorrow.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    # Конвертируем в UTC для сохранения в БД
+                    return result.astimezone(pytz.UTC).replace(tzinfo=None)
                 elif fmt == '%H:%M':
-                    # Сегодня
+                    # Сегодня в часовом поясе пользователя
                     hour, minute = map(int, match.groups())
-                    today = datetime.now()
-                    result = today.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    # Получаем текущее время в часовом поясе пользователя
+                    now_user_tz = datetime.now(tz)
+                    result = now_user_tz.replace(hour=hour, minute=minute, second=0, microsecond=0)
                     # Если время уже прошло сегодня, переносим на завтра
-                    if result <= today:
+                    if result <= now_user_tz:
                         result += timedelta(days=1)
-                    return result
+                    # Конвертируем в UTC для сохранения в БД
+                    return result.astimezone(pytz.UTC).replace(tzinfo=None)
                 elif fmt == '%d.%m %H:%M':
-                    # Текущий год
+                    # Текущий год в часовом поясе пользователя
                     day, month, hour, minute = map(int, match.groups())
-                    year = datetime.now().year
-                    return datetime(year, month, day, hour, minute)
+                    year = datetime.now(tz).year
+                    # Создаем время в часовом поясе пользователя
+                    result = tz.localize(datetime(year, month, day, hour, minute))
+                    # Конвертируем в UTC для сохранения в БД
+                    return result.astimezone(pytz.UTC).replace(tzinfo=None)
                 else:
-                    # Полная дата
-                    return datetime.strptime(date_str, fmt)
+                    # Полная дата в часовом поясе пользователя
+                    naive_dt = datetime.strptime(date_str, fmt)
+                    # Локализуем в часовом поясе пользователя
+                    localized_dt = tz.localize(naive_dt)
+                    # Конвертируем в UTC для сохранения в БД
+                    return localized_dt.astimezone(pytz.UTC).replace(tzinfo=None)
             except ValueError:
                 continue
     

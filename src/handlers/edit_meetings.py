@@ -1,34 +1,39 @@
 """Обработчики для редактирования встреч"""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
 from ..constants import (
     EDIT_WAITING_CHOICE, EDIT_WAITING_TITLE, EDIT_WAITING_DESCRIPTION, 
-    EDIT_WAITING_TIME, EDIT_WAITING_RECURRENCE, EDIT_WAITING_END_DATE,
+    EDIT_WAITING_TIME, EDIT_WAITING_RECURRENCE, EDIT_WAITING_END_DATE, EDIT_WAITING_WEEKDAYS,
     MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH
 )
-from ..utils.helpers import parse_datetime, format_reminder_time, format_recurrence_info
+from ..utils.helpers import parse_datetime, format_reminder_time, format_recurrence_info, format_meeting_time_for_user
 
 logger = logging.getLogger(__name__)
 
 
-async def show_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, meeting_id: int, user_id: int) -> int:
+async def show_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, meeting_id: int, user_id: int, force_new_message: bool = False) -> int:
     """Показать меню редактирования встречи"""
     from ..main import db
     
     # Получаем обновленную информацию о встрече
     meeting = db.get_meeting_by_id(meeting_id, user_id)
     if not meeting:
-        await update.message.reply_text("❌ Встреча не найдена.")
+        # Проверяем, есть ли callback_query или обычное сообщение
+        if update.callback_query:
+            await update.callback_query.edit_message_text("❌ Встреча не найдена.")
+        else:
+            await update.message.reply_text("❌ Встреча не найдена.")
         context.user_data.clear()
         return ConversationHandler.END
     
-    # Форматируем информацию о встрече
+    # Форматируем информацию о встрече в часовом поясе пользователя
     meeting_time = datetime.fromisoformat(meeting['meeting_time'])
-    time_str = meeting_time.strftime("%d.%m.%Y в %H:%M")
+    user_timezone = db.get_user_timezone(user_id)
+    time_str = format_meeting_time_for_user(meeting_time, user_timezone)
     
     text = f"✏️ **Редактирование встречи**\n\n"
     text += f"📝 **Название:** {meeting['title']}\n"
@@ -66,12 +71,37 @@ async def show_edit_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, mee
         [InlineKeyboardButton("⬅️ Назад к списку", callback_data="back_to_meetings")]
     ])
     
-    # Отправляем новое сообщение с меню
-    await update.message.reply_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    # Отправляем или редактируем сообщение с меню
+    # Проверяем, есть ли callback_query (вызов из кнопки) или обычное сообщение
+    if update.callback_query and not force_new_message:
+        # Редактируем существующее сообщение
+        try:
+            await update.callback_query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        except Exception:
+            # Если не удалось отредактировать, отправляем новое сообщение
+            await update.callback_query.message.reply_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+    else:
+        # Отправляем новое сообщение
+        if update.callback_query:
+            await update.callback_query.message.reply_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
     
     return EDIT_WAITING_CHOICE
 
@@ -97,9 +127,10 @@ async def edit_meeting_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # Сохраняем ID встречи в контексте
     context.user_data['editing_meeting_id'] = meeting_id
     
-    # Форматируем информацию о встрече
+    # Форматируем информацию о встрече в часовом поясе пользователя
     meeting_time = datetime.fromisoformat(meeting['meeting_time'])
-    time_str = meeting_time.strftime("%d.%m.%Y в %H:%M")
+    user_timezone = db.get_user_timezone(user.id)
+    time_str = format_meeting_time_for_user(meeting_time, user_timezone)
     
     text = f"✏️ **Редактирование встречи**\n\n"
     text += f"📝 **Название:** {meeting['title']}\n"
@@ -149,9 +180,12 @@ async def edit_meeting_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def edit_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка выбора что редактировать"""
+    from ..main import db  # Импорт здесь для избежания циклических импортов
+    
     query = update.callback_query
     await query.answer()
     
+    user = update.effective_user
     choice = query.data
     
     if choice == "edit_title":
@@ -183,9 +217,38 @@ async def edit_choice_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return EDIT_WAITING_TIME
     
     elif choice == "edit_recurrence":
+        # Получаем информацию о встрече
+        meeting_id = context.user_data.get('editing_meeting_id')
+        meeting = db.get_meeting_by_id(meeting_id, user.id)
+        
+        if not meeting or not meeting.get('is_recurring'):
+            await query.edit_message_text(
+                "❌ Эта встреча не является регулярной или не найдена.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_meetings")]]),
+                parse_mode='Markdown'
+            )
+            return EDIT_WAITING_RECURRENCE
+        
+        # Создаем кнопки для выбора типа повторения
+        from ..constants import RECURRENCE_TYPES, TYPE_NAMES
+        keyboard = []
+        
+        current_type = meeting.get('recurrence_type', 'daily')
+        
+        for callback_data, recurrence_type in RECURRENCE_TYPES.items():
+            type_name = TYPE_NAMES.get(recurrence_type, recurrence_type)
+            # Отмечаем текущий тип
+            if recurrence_type == current_type:
+                type_name = f"✅ {type_name}"
+            keyboard.append([InlineKeyboardButton(type_name, callback_data=f"recur_type_{recurrence_type}")])
+        
+        keyboard.append([InlineKeyboardButton("⬅️ Назад к редактированию", callback_data="back_to_meetings")])
+        
         await query.edit_message_text(
             "🔄 **Редактирование повторения**\n\n"
-            "Эта функция пока в разработке. Используйте кнопку 'Назад' для возврата.",
+            f"Текущий тип: **{TYPE_NAMES.get(current_type, current_type)}**\n\n"
+            "Выберите новый тип повторения:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode='Markdown'
         )
         return EDIT_WAITING_RECURRENCE
@@ -289,10 +352,12 @@ async def edit_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     time_str = update.message.text.strip()
     
     try:
-        new_time = parse_datetime(time_str)
+        # Получаем часовой пояс пользователя
+        user_timezone = db.get_user_timezone(user.id)
+        new_time = parse_datetime(time_str, user_timezone)
         
-        # Проверяем, что время в будущем
-        if new_time <= datetime.now():
+        # Проверяем, что время в будущем (сравниваем в UTC)
+        if new_time <= datetime.utcnow():
             await update.message.reply_text(
                 "⚠️ Время встречи должно быть в будущем. Попробуйте еще раз:"
             )
@@ -303,16 +368,39 @@ async def edit_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await update.message.reply_text("❌ Ошибка: встреча не найдена.")
             return ConversationHandler.END
         
+        # Получаем информацию о встрече для проверки типа повторения
+        meeting = db.get_meeting_by_id(meeting_id, user.id)
+        if not meeting:
+            await update.message.reply_text("❌ Ошибка: встреча не найдена.")
+            return ConversationHandler.END
+        
+        # Проверяем совместимость времени с типом повторения
+        if meeting.get('recurrence_type') == 'weekdays':
+            # Для встреч "по будням" проверяем, что день недели - рабочий (пн-пт)
+            weekday = new_time.weekday()  # 0=понедельник, 6=воскресенье
+            if weekday >= 5:  # суббота или воскресенье
+                weekday_names = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье']
+                current_day = weekday_names[weekday]
+                await update.message.reply_text(
+                    f"⚠️ Встреча настроена на повторение **по будням (пн-пт)**, "
+                    f"но выбранное время приходится на **{current_day}**.\n\n"
+                    f"Выберите время в рабочий день (понедельник-пятница) или "
+                    f"измените тип повторения встречи.",
+                    parse_mode='Markdown'
+                )
+                return EDIT_WAITING_TIME
+        
         # Обновляем встречу
         success = db.update_meeting(meeting_id, user.id, meeting_time=new_time)
         
         if success:
-            time_display = new_time.strftime("%d.%m.%Y в %H:%M")
+            # Отображаем время в часовом поясе пользователя
+            time_display = format_meeting_time_for_user(new_time, user_timezone)
             await update.message.reply_text(f"✅ Время встречи обновлено на: **{time_display}**", parse_mode='Markdown')
             logger.info(f"Пользователь {user.id} обновил время встречи ID {meeting_id} на {new_time}")
             
             # Возвращаемся к меню редактирования встречи
-            return await show_edit_menu(update, context, meeting_id, user.id)
+            return await show_edit_menu(update, context, meeting_id, user.id, force_new_message=True)
         else:
             await update.message.reply_text("❌ Ошибка при обновлении встречи.")
             context.user_data.clear()
@@ -336,6 +424,297 @@ async def edit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     context.user_data.clear()
     await update.message.reply_text("❌ Редактирование встречи отменено.")
     return ConversationHandler.END
+
+
+async def edit_recurrence_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора нового типа повторения"""
+    from ..main import db
+    
+    query = update.callback_query
+    await query.answer()
+    
+    user = update.effective_user
+    
+    # Извлекаем новый тип повторения из callback_data
+    if query.data == "recur_type_custom_weekdays":
+        new_recurrence_type = "custom_weekdays"
+    else:
+        new_recurrence_type = query.data.split("_")[2]  # recur_type_daily -> daily
+    
+    meeting_id = context.user_data.get('editing_meeting_id')
+    if not meeting_id:
+        await query.edit_message_text("❌ Ошибка: встреча не найдена.")
+        return ConversationHandler.END
+    
+    # Если выбран тип "по определенным дням", показываем выбор дней недели
+    if new_recurrence_type == "custom_weekdays":
+        # Сохраняем выбранный тип в контексте
+        context.user_data['new_recurrence_type'] = new_recurrence_type
+        
+        # Показываем выбор дней недели
+        keyboard = [
+            [InlineKeyboardButton("Понедельник", callback_data="weekday_0")],
+            [InlineKeyboardButton("Вторник", callback_data="weekday_1")],
+            [InlineKeyboardButton("Среда", callback_data="weekday_2")],
+            [InlineKeyboardButton("Четверг", callback_data="weekday_3")],
+            [InlineKeyboardButton("Пятница", callback_data="weekday_4")],
+            [InlineKeyboardButton("Суббота", callback_data="weekday_5")],
+            [InlineKeyboardButton("Воскресенье", callback_data="weekday_6")],
+            [InlineKeyboardButton("✅ Готово", callback_data="weekdays_done")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_meetings")]
+        ]
+        
+        await query.edit_message_text(
+            "📅 **Выберите дни недели для повторения:**\n\n"
+            "Нажмите на дни, в которые должна повторяться встреча.\n"
+            "Нажмите '✅ Готово' когда закончите выбор.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='Markdown'
+        )
+        
+        # Инициализируем список выбранных дней
+        context.user_data['selected_weekdays'] = []
+        
+        return EDIT_WAITING_WEEKDAYS
+    else:
+        # Для других типов повторения обновляем сразу
+        # Но сначала проверяем, нужно ли скорректировать дату
+        meeting = db.get_meeting_by_id(meeting_id, user.id)
+        if not meeting:
+            await query.edit_message_text("❌ Ошибка: встреча не найдена.")
+            return ConversationHandler.END
+        
+        current_time = datetime.fromisoformat(meeting['meeting_time'])
+        new_time = current_time
+        time_adjusted = False
+        
+        # Автоматическая корректировка времени для "по будням"
+        if new_recurrence_type == 'weekdays':
+            weekday = current_time.weekday()  # 0=понедельник, 6=воскресенье
+            if weekday >= 5:  # суббота или воскресенье
+                # Переносим на ближайший понедельник
+                days_to_add = 7 - weekday  # суббота: 7-5=2, воскресенье: 7-6=1
+                new_time = current_time + timedelta(days=days_to_add)
+                time_adjusted = True
+        
+        # Обновляем встречу с новым типом повторения и возможно скорректированным временем
+        if time_adjusted:
+            success = db.update_meeting(meeting_id, user.id, 
+                                      recurrence_type=new_recurrence_type, 
+                                      meeting_time=new_time)
+        else:
+            success = db.update_meeting(meeting_id, user.id, recurrence_type=new_recurrence_type)
+        
+        if success:
+            from ..constants import TYPE_NAMES
+            type_name = TYPE_NAMES.get(new_recurrence_type, new_recurrence_type)
+            
+            message = f"✅ Тип повторения обновлен на: **{type_name}**"
+            
+            if time_adjusted:
+                # Получаем часовой пояс пользователя для отображения
+                user_timezone = db.get_user_timezone(user.id)
+                time_display = format_meeting_time_for_user(new_time, user_timezone)
+                message += f"\n\n⏰ Время автоматически скорректировано на ближайший рабочий день: **{time_display}**"
+            
+            await query.edit_message_text(message, parse_mode='Markdown')
+            logger.info(f"Пользователь {user.id} обновил тип повторения встречи ID {meeting_id} на {new_recurrence_type}")
+            if time_adjusted:
+                logger.info(f"Время встречи ID {meeting_id} автоматически скорректировано на {new_time}")
+            
+            # Возвращаемся к меню редактирования встречи
+            return await show_edit_menu(update, context, meeting_id, user.id, force_new_message=True)
+        else:
+            await query.edit_message_text("❌ Ошибка при обновлении типа повторения.")
+            context.user_data.clear()
+            return ConversationHandler.END
+
+
+async def edit_weekday_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора дня недели"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "weekdays_done":
+        # Завершение выбора дней недели
+        return await finalize_weekdays_selection(update, context)
+    
+    # Извлекаем номер дня недели
+    weekday = int(query.data.split("_")[1])
+    
+    # Получаем текущий список выбранных дней
+    selected_weekdays = context.user_data.get('selected_weekdays', [])
+    
+    # Переключаем выбор дня
+    if weekday in selected_weekdays:
+        selected_weekdays.remove(weekday)
+    else:
+        selected_weekdays.append(weekday)
+    
+    context.user_data['selected_weekdays'] = selected_weekdays
+    
+    # Обновляем клавиатуру с отмеченными днями
+    weekday_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    keyboard = []
+    
+    for i, name in enumerate(weekday_names):
+        if i in selected_weekdays:
+            keyboard.append([InlineKeyboardButton(f"✅ {name}", callback_data=f"weekday_{i}")])
+        else:
+            keyboard.append([InlineKeyboardButton(name, callback_data=f"weekday_{i}")])
+    
+    keyboard.extend([
+        [InlineKeyboardButton("✅ Готово", callback_data="weekdays_done")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_meetings")]
+    ])
+    
+    selected_names = [weekday_names[i] for i in sorted(selected_weekdays)]
+    selected_text = ", ".join(selected_names) if selected_names else "не выбраны"
+    
+    await query.edit_message_text(
+        f"📅 **Выберите дни недели для повторения:**\n\n"
+        f"**Выбранные дни:** {selected_text}\n\n"
+        f"Нажмите на дни, чтобы добавить/убрать их из списка.\n"
+        f"Нажмите '✅ Готово' когда закончите выбор.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    return EDIT_WAITING_WEEKDAYS
+
+
+async def finalize_weekdays_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Завершение выбора дней недели и обновление встречи"""
+    from ..main import db
+    
+    query = update.callback_query
+    user = update.effective_user
+    
+    selected_weekdays = context.user_data.get('selected_weekdays', [])
+    meeting_id = context.user_data.get('editing_meeting_id')
+    new_recurrence_type = context.user_data.get('new_recurrence_type')
+    
+    if not selected_weekdays:
+        await query.edit_message_text(
+            "❌ Выберите хотя бы один день недели!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("⬅️ Назад к выбору дней", callback_data="back_to_weekdays")
+            ]])
+        )
+        return EDIT_WAITING_WEEKDAYS
+    
+    # Преобразуем список дней в строку для сохранения
+    weekdays_str = ",".join(map(str, sorted(selected_weekdays)))
+    
+    # Логируем выбранные дни для отладки
+    weekday_names = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+    selected_names = [weekday_names[d] for d in selected_weekdays]
+    logger.info(f"Выбраны дни недели: {selected_names} (индексы: {selected_weekdays})")
+    
+    # Проверяем, нужно ли скорректировать дату
+    meeting = db.get_meeting_by_id(meeting_id, user.id)
+    if not meeting:
+        await query.edit_message_text("❌ Ошибка: встреча не найдена.")
+        return ConversationHandler.END
+    
+    current_time = datetime.fromisoformat(meeting['meeting_time'])
+    current_weekday = current_time.weekday()  # 0=понедельник, 6=воскресенье
+    new_time = current_time
+    time_adjusted = False
+    
+    # Проверяем, нужна ли корректировка даты
+    # 1. Если текущий день недели не входит в выбранные дни
+    # 2. Если встреча уже в прошлом (для регулярных встреч)
+    needs_adjustment = (current_weekday not in selected_weekdays) or (current_time <= datetime.utcnow())
+    
+    if needs_adjustment:
+        # Ищем ближайший день из выбранных
+        days_ahead = []
+        
+        # Если встреча в прошлом, ищем от сегодняшнего дня
+        if current_time <= datetime.utcnow():
+            today_weekday = datetime.utcnow().weekday()
+            for selected_day in selected_weekdays:
+                if selected_day >= today_weekday:
+                    # День на этой неделе (сегодня или позже)
+                    days_ahead.append(selected_day - today_weekday)
+                else:
+                    # День на следующей неделе
+                    days_ahead.append(7 - today_weekday + selected_day)
+            
+            # Корректируем от сегодняшней даты
+            today = datetime.utcnow().replace(hour=current_time.hour, minute=current_time.minute, second=0, microsecond=0)
+            if days_ahead:
+                min_days = min(days_ahead)
+                new_time = today + timedelta(days=min_days)
+                time_adjusted = True
+        else:
+            # Встреча в будущем, корректируем от текущей даты встречи
+            for selected_day in selected_weekdays:
+                if selected_day > current_weekday:
+                    # День на этой неделе
+                    days_ahead.append(selected_day - current_weekday)
+                else:
+                    # День на следующей неделе
+                    days_ahead.append(7 - current_weekday + selected_day)
+            
+            if days_ahead:
+                min_days = min(days_ahead)
+                new_time = current_time + timedelta(days=min_days)
+                time_adjusted = True
+        
+        # Логируем для отладки
+        if time_adjusted:
+            weekday_names = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+            current_day_name = weekday_names[current_weekday]
+            selected_names = [weekday_names[d] for d in selected_weekdays]
+            logger.info(f"Корректировка даты: с {current_day_name} на {', '.join(selected_names)}, новое время: {new_time}")
+    
+    # Обновляем встречу с новым типом повторения, днями недели и возможно скорректированным временем
+    if time_adjusted:
+        success = db.update_meeting(
+            meeting_id, 
+            user.id, 
+            recurrence_type=new_recurrence_type,
+            recurrence_weekdays=weekdays_str,
+            meeting_time=new_time
+        )
+    else:
+        success = db.update_meeting(
+            meeting_id, 
+            user.id, 
+            recurrence_type=new_recurrence_type,
+            recurrence_weekdays=weekdays_str
+        )
+    
+    if success:
+        weekday_names = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+        selected_names = [weekday_names[i] for i in sorted(selected_weekdays)]
+        days_text = ", ".join(selected_names)
+        
+        message = f"✅ Тип повторения обновлен на: **по определенным дням ({days_text})**"
+        
+        if time_adjusted:
+            # Получаем часовой пояс пользователя для отображения
+            user_timezone = db.get_user_timezone(user.id)
+            time_display = format_meeting_time_for_user(new_time, user_timezone)
+            message += f"\n\n⏰ Время автоматически скорректировано на ближайший подходящий день: **{time_display}**"
+        
+        await query.edit_message_text(message, parse_mode='Markdown')
+        logger.info(f"Пользователь {user.id} обновил тип повторения встречи ID {meeting_id} на {new_recurrence_type} с днями {weekdays_str}")
+        if time_adjusted:
+            logger.info(f"Время встречи ID {meeting_id} автоматически скорректировано на {new_time}")
+        
+        # Очищаем временные данные
+        context.user_data.pop('selected_weekdays', None)
+        context.user_data.pop('new_recurrence_type', None)
+        
+        # Возвращаемся к меню редактирования встречи
+        return await show_edit_menu(update, context, meeting_id, user.id)
+    else:
+        await query.edit_message_text("❌ Ошибка при обновлении типа повторения.")
+        context.user_data.clear()
+        return ConversationHandler.END
 
 
 async def back_to_edit_list_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

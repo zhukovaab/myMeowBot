@@ -11,7 +11,7 @@ from ..constants import (
     EDIT_WAITING_TIME, EDIT_WAITING_RECURRENCE, EDIT_WAITING_END_DATE,
     MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_MEETINGS_PER_DAY
 )
-from ..utils.helpers import parse_datetime, format_reminder_time, format_recurrence_info
+from ..utils.helpers import parse_datetime, format_reminder_time, format_recurrence_info, format_meeting_time_for_user
 from ..utils.rate_limiter import check_rate_limit, get_remaining_quota
 
 logger = logging.getLogger(__name__)
@@ -99,10 +99,12 @@ async def add_meeting_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     time_str = update.message.text.strip()
     
     try:
-        meeting_time = parse_datetime(time_str)
+        # Получаем часовой пояс пользователя
+        user_timezone = db.get_user_timezone(user.id)
+        meeting_time = parse_datetime(time_str, user_timezone)
         
-        # Проверяем, что время в будущем
-        if meeting_time <= datetime.now():
+        # Проверяем, что время в будущем (сравниваем в UTC)
+        if meeting_time <= datetime.utcnow():
             await update.message.reply_text(
                 "⚠️ Время встречи должно быть в будущем. Попробуйте еще раз:"
             )
@@ -114,8 +116,9 @@ async def add_meeting_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         
         meeting_id = db.add_meeting(user.id, title, description, meeting_time)
         
-        # Форматируем время для отображения
-        time_display = meeting_time.strftime("%d.%m.%Y в %H:%M")
+        # Форматируем время для отображения в часовом поясе пользователя
+        user_timezone = db.get_user_timezone(user.id)
+        time_display = format_meeting_time_for_user(meeting_time, user_timezone)
         
         # Получаем пользовательские настройки времени напоминания
         user_reminder_minutes = db.get_user_reminder_minutes(user.id)
@@ -168,20 +171,30 @@ async def list_meetings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         meetings = db.get_user_meetings(user.id)
         
         if not meetings:
+            # Создаем кнопки для добавления встреч
+            keyboard = [
+                [InlineKeyboardButton("➕ Добавить встречу", callback_data="action_add")],
+                [InlineKeyboardButton("⚙️ Настройки", callback_data="back_to_settings")]
+            ]
+            
             await update.message.reply_text(
                 "📅 У вас пока нет запланированных встреч.\n\n"
-                "Используйте /add_meeting чтобы добавить новую встречу."
+                "Используйте /add_meeting чтобы добавить новую встречу.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
         
+        # Получаем часовой пояс пользователя
+        user_timezone = db.get_user_timezone(user.id)
+        
         # Разделяем встречи на прошедшие и предстоящие
-        now = datetime.now()
+        now_utc = datetime.utcnow()
         upcoming = []
         past = []
         
         for meeting in meetings:
             meeting_time = datetime.fromisoformat(meeting['meeting_time'])
-            if meeting_time > now:
+            if meeting_time > now_utc:
                 upcoming.append((meeting, meeting_time))
             else:
                 past.append((meeting, meeting_time))
@@ -192,7 +205,7 @@ async def list_meetings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if upcoming:
             response += "🔜 **Предстоящие:**\n"
             for meeting, meeting_time in upcoming:
-                time_str = meeting_time.strftime("%d.%m.%Y в %H:%M")
+                time_str = format_meeting_time_for_user(meeting_time, user_timezone)
                 
                 # Иконка для регулярных встреч
                 icon = "🔄" if meeting.get('is_recurring') else "📅"
@@ -220,7 +233,7 @@ async def list_meetings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if past:
             response += "📋 **Прошедшие (последние 5):**\n"
             for meeting, meeting_time in past[-5:]:
-                time_str = meeting_time.strftime("%d.%m.%Y в %H:%M")
+                time_str = format_meeting_time_for_user(meeting_time, user_timezone)
                 response += f"• `{meeting['id']}` - {meeting['title']}\n"
                 response += f"  🕐 {time_str}\n"
                 response += "\n"
@@ -284,7 +297,8 @@ async def delete_meeting(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         meeting_time = datetime.fromisoformat(meeting['meeting_time'])
-        time_str = meeting_time.strftime("%d.%m.%Y в %H:%M")
+        user_timezone = db.get_user_timezone(user.id)
+        time_str = format_meeting_time_for_user(meeting_time, user_timezone)
         
         await update.message.reply_text(
             f"🗑️ **Удаление встречи**\n\n"

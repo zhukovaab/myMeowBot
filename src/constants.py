@@ -2,13 +2,14 @@
 
 # Состояния для ConversationHandler
 WAITING_TITLE, WAITING_DESCRIPTION, WAITING_TIME = range(3)
-EDIT_WAITING_CHOICE, EDIT_WAITING_TITLE, EDIT_WAITING_DESCRIPTION, EDIT_WAITING_TIME, EDIT_WAITING_RECURRENCE, EDIT_WAITING_END_DATE = range(4, 10)
+EDIT_WAITING_CHOICE, EDIT_WAITING_TITLE, EDIT_WAITING_DESCRIPTION, EDIT_WAITING_TIME, EDIT_WAITING_RECURRENCE, EDIT_WAITING_END_DATE, EDIT_WAITING_WEEKDAYS = range(4, 11)
 
 # Состояния для регулярных встреч
-RECURRING_WAITING_TITLE, RECURRING_WAITING_DESCRIPTION, RECURRING_WAITING_TIME, RECURRING_WAITING_TYPE, RECURRING_WAITING_INTERVAL, RECURRING_WAITING_WEEKDAYS, RECURRING_WAITING_END = range(15, 22)
+RECURRING_WAITING_TITLE, RECURRING_WAITING_DESCRIPTION, RECURRING_WAITING_TIME, RECURRING_WAITING_TYPE, RECURRING_WAITING_INTERVAL, RECURRING_WAITING_WEEKDAYS, RECURRING_WAITING_END = range(11, 18)
 
 # Состояния для настроек
-SETTINGS_WAITING_REMINDER_TIME = 22
+SETTINGS_WAITING_REMINDER_TIME = 18
+SETTINGS_WAITING_TIMEZONE = 19
 
 # Типы повторения встреч
 RECURRENCE_TYPES = {
@@ -47,3 +48,22 @@ MAX_MEETINGS_PER_DAY = 50
 # API настройки
 CAT_API_URL = 'https://api.thecatapi.com/v1/images/search'
 REQUEST_TIMEOUT = 15
+
+# Часовые пояса по времени от UTC-12 до UTC+12
+POPULAR_TIMEZONES = {
+    'Pacific/Auckland': 'UTC+12 (Окленд)',
+    'Asia/Vladivostok': 'UTC+10 (Владивосток)',
+    'Asia/Tokyo': 'UTC+9 (Токио)',
+    'Asia/Irkutsk': 'UTC+8 (Иркутск)',
+    'Asia/Krasnoyarsk': 'UTC+7 (Красноярск)',
+    'Asia/Almaty': 'UTC+6 (Алматы)',
+    'Asia/Yekaterinburg': 'UTC+5 (Екатеринбург)',
+    'Asia/Dubai': 'UTC+4 (Дубай)',
+    'Europe/Moscow': 'UTC+3 (Москва)',
+    'Europe/Kiev': 'UTC+2 (Киев)',
+    'Europe/Berlin': 'UTC+1 (Берлин)',
+    'Europe/London': 'UTC+0 (Лондон)',
+    'America/New_York': 'UTC-5 (Нью-Йорк)',
+    'America/Los_Angeles': 'UTC-8 (Лос-Анджелес)',
+    'Pacific/Honolulu': 'UTC-10 (Гонолулу)'
+}

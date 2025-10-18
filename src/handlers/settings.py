@@ -4,7 +4,10 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
-from ..constants import SETTINGS_WAITING_REMINDER_TIME, MIN_REMINDER_MINUTES, MAX_REMINDER_MINUTES
+from ..constants import (
+    SETTINGS_WAITING_REMINDER_TIME, SETTINGS_WAITING_TIMEZONE,
+    MIN_REMINDER_MINUTES, MAX_REMINDER_MINUTES, POPULAR_TIMEZONES
+)
 from ..utils.helpers import format_reminder_time
 
 logger = logging.getLogger(__name__)
@@ -21,20 +24,26 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         # Получаем текущие настройки пользователя
         user_settings = db.get_user_settings(user.id)
         reminder_minutes = user_settings['reminder_minutes']
+        timezone = user_settings.get('timezone', 'Europe/Moscow')
         
         # Формируем текст с правильным склонением
         time_text = format_reminder_time(reminder_minutes)
+        
+        # Форматируем название часового пояса для отображения
+        timezone_display = timezone.replace('_', ' ').replace('/', ' / ')
         
         settings_text = f"""
 ⚙️ **Ваши настройки:**
 
 🔔 **Время напоминания:** за {time_text} до встречи
+🌍 **Часовой пояс:** {timezone_display}
 
 Нажмите кнопку ниже, чтобы изменить настройки:
         """
         
         keyboard = [
             [InlineKeyboardButton("🔔 Изменить время напоминания", callback_data="change_reminder_time")],
+            [InlineKeyboardButton("🌍 Изменить часовой пояс", callback_data="change_timezone")],
             [InlineKeyboardButton("📋 К списку встреч", callback_data="back_to_meetings")]
         ]
         
@@ -168,20 +177,26 @@ async def back_to_settings_callback(update: Update, context: ContextTypes.DEFAUL
     # Получаем текущие настройки пользователя
     user_settings = db.get_user_settings(user.id)
     reminder_minutes = user_settings['reminder_minutes']
+    timezone = user_settings.get('timezone', 'Europe/Moscow')
     
     # Формируем текст с правильным склонением
     time_text = format_reminder_time(reminder_minutes)
+    
+    # Форматируем название часового пояса для отображения
+    timezone_display = timezone.replace('_', ' ').replace('/', ' / ')
     
     settings_text = f"""
 ⚙️ **Ваши настройки:**
 
 🔔 **Время напоминания:** за {time_text} до встречи
+🌍 **Часовой пояс:** {timezone_display}
 
 Нажмите кнопку ниже, чтобы изменить настройки:
     """
     
     keyboard = [
         [InlineKeyboardButton("🔔 Изменить время напоминания", callback_data="change_reminder_time")],
+        [InlineKeyboardButton("🌍 Изменить часовой пояс", callback_data="change_timezone")],
         [InlineKeyboardButton("📋 К списку встреч", callback_data="back_to_meetings")]
     ]
     
@@ -190,6 +205,62 @@ async def back_to_settings_callback(update: Update, context: ContextTypes.DEFAUL
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
+
+
+async def change_timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработчик для изменения часового пояса"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Создаем клавиатуру с популярными часовыми поясами
+    keyboard = []
+    for tz_id, tz_name in POPULAR_TIMEZONES.items():
+        keyboard.append([InlineKeyboardButton(tz_name, callback_data=f"set_tz_{tz_id}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Назад к настройкам", callback_data="back_to_settings")])
+    
+    await query.edit_message_text(
+        "🌍 **Выберите ваш часовой пояс:**\n\n"
+        "Это поможет боту правильно обрабатывать время ваших встреч.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    return ConversationHandler.END
+
+
+async def set_timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Установка выбранного часового пояса"""
+    from ..main import db  # Импорт здесь для избежания циклических импортов
+    
+    query = update.callback_query
+    await query.answer()
+    
+    # Извлекаем timezone из callback_data
+    timezone = query.data.replace("set_tz_", "")
+    user = update.effective_user
+    
+    try:
+        # Обновляем часовой пояс пользователя
+        success = db.set_user_timezone(user.id, timezone)
+        
+        if success:
+            timezone_display = POPULAR_TIMEZONES.get(timezone, timezone)
+            await query.edit_message_text(
+                f"✅ Часовой пояс успешно изменен на **{timezone_display}**\n\n"
+                "Теперь все времена встреч будут обрабатываться в вашем часовом поясе.",
+                parse_mode='Markdown'
+            )
+            logger.info(f"Пользователь {user.id} изменил часовой пояс на {timezone}")
+        else:
+            await query.edit_message_text(
+                "❌ Произошла ошибка при изменении часового пояса. Попробуйте еще раз."
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при изменении часового пояса для пользователя {user.id}: {e}")
+        await query.edit_message_text(
+            "❌ Произошла ошибка при изменении часового пояса. Попробуйте еще раз."
+        )
 
 
 async def settings_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

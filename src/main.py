@@ -11,10 +11,10 @@ from .config.settings import setup_logging, get_bot_token, DATABASE_PATH, POLLIN
 from .constants import (
     WAITING_TITLE, WAITING_DESCRIPTION, WAITING_TIME,
     EDIT_WAITING_CHOICE, EDIT_WAITING_TITLE, EDIT_WAITING_DESCRIPTION, 
-    EDIT_WAITING_TIME, EDIT_WAITING_RECURRENCE, EDIT_WAITING_END_DATE,
+    EDIT_WAITING_TIME, EDIT_WAITING_RECURRENCE, EDIT_WAITING_END_DATE, EDIT_WAITING_WEEKDAYS,
     RECURRING_WAITING_TITLE, RECURRING_WAITING_DESCRIPTION, RECURRING_WAITING_TIME, 
     RECURRING_WAITING_TYPE, RECURRING_WAITING_INTERVAL, RECURRING_WAITING_WEEKDAYS, RECURRING_WAITING_END,
-    SETTINGS_WAITING_REMINDER_TIME
+    SETTINGS_WAITING_REMINDER_TIME, SETTINGS_WAITING_TIMEZONE
 )
 from .handlers.basic_commands import start, meow, help_command, error_handler
 from .handlers.meetings import (
@@ -23,13 +23,18 @@ from .handlers.meetings import (
 )
 from .handlers.edit_meetings import (
     edit_meeting_callback, edit_choice_callback, edit_title, 
-    edit_description, edit_time, edit_cancel, back_to_edit_list_callback
+    edit_description, edit_time, edit_cancel, back_to_edit_list_callback, edit_recurrence_type,
+    edit_weekday_callback, finalize_weekdays_selection
 )
 from .handlers.settings import (
     settings_command, change_reminder_time_callback, set_reminder_time,
-    back_to_settings_callback, settings_cancel
+    back_to_settings_callback, settings_cancel, change_timezone_callback, set_timezone_callback
 )
 from .handlers.callbacks import delete_meeting_callback, meetings_action_callback, add_meeting_callback
+from .handlers.recurring_meetings import (
+    add_recurring_title, add_recurring_description, add_recurring_time,
+    add_recurring_type, add_recurring_weekdays, add_recurring_cancel
+)
 
 # Импорты существующих модулей
 from database import MeetingDatabase
@@ -96,7 +101,7 @@ def main() -> None:
         add_meeting_handler = ConversationHandler(
             entry_points=[
                 CommandHandler("add_meeting", add_meeting_start),
-                CallbackQueryHandler(add_meeting_callback, pattern="^(add_regular|add_recurring)$"),
+                CallbackQueryHandler(add_meeting_callback, pattern="^add_regular$"),
             ],
             states={
                 WAITING_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_meeting_title)],
@@ -108,6 +113,34 @@ def main() -> None:
             per_chat=True
         )
         application.add_handler(add_meeting_handler)
+        
+        # Добавляем ConversationHandler для регулярных встреч
+        recurring_meeting_handler = ConversationHandler(
+            entry_points=[
+                CallbackQueryHandler(add_meeting_callback, pattern="^add_recurring$"),
+            ],
+            states={
+                RECURRING_WAITING_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_recurring_title)],
+                RECURRING_WAITING_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_recurring_description)],
+                RECURRING_WAITING_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_recurring_time)],
+                RECURRING_WAITING_TYPE: [
+                    CallbackQueryHandler(add_recurring_type, pattern="^recur_"),
+                    CallbackQueryHandler(add_recurring_cancel, pattern="^cancel_recurring$")
+                ],
+                RECURRING_WAITING_WEEKDAYS: [
+                    CallbackQueryHandler(add_recurring_weekdays, pattern="^weekday_\\d+$"),
+                    CallbackQueryHandler(add_recurring_weekdays, pattern="^weekdays_done$"),
+                    CallbackQueryHandler(add_recurring_cancel, pattern="^cancel_recurring$")
+                ],
+            },
+            fallbacks=[
+                CommandHandler("cancel", add_recurring_cancel),
+                CallbackQueryHandler(add_recurring_cancel, pattern="^cancel_recurring$")
+            ],
+            per_message=False,
+            per_chat=True
+        )
+        application.add_handler(recurring_meeting_handler)
         
         # Добавляем ConversationHandler для настроек
         settings_handler = ConversationHandler(
@@ -136,6 +169,19 @@ def main() -> None:
                 EDIT_WAITING_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_title)],
                 EDIT_WAITING_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_description)],
                 EDIT_WAITING_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_time)],
+                EDIT_WAITING_RECURRENCE: [
+                    CallbackQueryHandler(edit_recurrence_type, pattern="^recur_type_"),
+                    CallbackQueryHandler(back_to_edit_list_callback, pattern="^back_to_meetings$")
+                ],
+                EDIT_WAITING_WEEKDAYS: [
+                    CallbackQueryHandler(edit_weekday_callback, pattern="^weekday_\\d+$"),
+                    CallbackQueryHandler(finalize_weekdays_selection, pattern="^weekdays_done$"),
+                    CallbackQueryHandler(back_to_edit_list_callback, pattern="^back_to_meetings$")
+                ],
+                EDIT_WAITING_END_DATE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, edit_title),  # Временно используем edit_title
+                    CallbackQueryHandler(back_to_edit_list_callback, pattern="^back_to_meetings$")
+                ],
             },
             fallbacks=[CommandHandler("cancel", edit_cancel)],
             per_message=False,
@@ -151,6 +197,8 @@ def main() -> None:
         
         # Добавляем обработчик для кнопок настроек
         application.add_handler(CallbackQueryHandler(back_to_settings_callback, pattern="^back_to_settings$"))
+        application.add_handler(CallbackQueryHandler(change_timezone_callback, pattern="^change_timezone$"))
+        application.add_handler(CallbackQueryHandler(set_timezone_callback, pattern="^set_tz_"))
         
         # Добавляем обработчик ошибок
         application.add_error_handler(error_handler)
