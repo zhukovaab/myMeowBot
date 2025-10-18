@@ -17,10 +17,36 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
         logger.info(f"Пользователь {user.id} ({user.username}) запустил бота")
         
-        await update.message.reply_text(
-            f"Привет, {user.first_name}! Я бот для получения картинок кошек! 🐱\n"
-            "Используй команду /meow чтобы получить случайную картинку кошки."
-        )
+        start_text = f"""Привет, {user.first_name}! 🐱 
+
+Я многофункциональный бот для управления встречами и получения картинок кошек!
+
+🐱 Основные команды:
+/start - Начать работу с ботом
+/meow - Получить случайную картинку кошки
+/help - Подробная справка
+
+📅 Управление встречами:
+/meetings - Показать список встреч
+/add_meeting - Добавить разовую встречу
+/add_recurring - Добавить регулярную встречу
+/edit_meeting - Редактировать встречу
+/delete_meeting - Удалить встречу
+
+⚙️ Настройки:
+/settings - Настройки напоминаний и часового пояса
+
+🔔 Возможности:
+• Получение картинок котиков 🐱
+• Напоминания за настраиваемое время
+• Регулярные встречи (ежедневно, еженедельно, по будням, по выбранным дням)
+• Поддержка часовых поясов
+• Автоматическое удаление прошедших встреч
+• Редактирование всех параметров встреч
+
+Для подробной справки используй /help"""
+        
+        await update.message.reply_text(start_text)
     except (TimedOut, NetworkError) as e:
         logger.error(f"Ошибка сети при отправке сообщения start: {e}")
     except Exception as e:
@@ -90,7 +116,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 /help - Показать это сообщение
 
 Встречи:
-/add_meeting - Добавить новую встречу
+/add_meeting - Добавить разовую встречу
 /add_recurring - Добавить регулярную встречу
 /meetings - Показать список встреч
 /edit_meeting - Редактировать встречу

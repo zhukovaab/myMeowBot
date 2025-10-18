@@ -68,7 +68,7 @@ async def meetings_action_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(
             "➕ Выберите тип встречи:",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📅 Обычная встреча", callback_data="add_regular")],
+                [InlineKeyboardButton("📅 Разовая встреча", callback_data="add_regular")],
                 [InlineKeyboardButton("🔄 Регулярная встреча", callback_data="add_recurring")],
                 [InlineKeyboardButton("📋 К списку встреч", callback_data="back_to_meetings")]
             ])

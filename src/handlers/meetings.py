@@ -179,7 +179,7 @@ async def list_meetings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             
             await update.message.reply_text(
                 "📅 У вас пока нет запланированных встреч.\n\n"
-                "Используйте /add_meeting чтобы добавить новую встречу.",
+                "Используйте /add_meeting чтобы добавить разовую встречу.",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
