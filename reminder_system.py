@@ -116,14 +116,16 @@ class ReminderSystem:
     async def _get_cat_image_url(self) -> Optional[str]:
         """Получение URL картинки котика из The Cat API"""
         try:
-            response = requests.get('https://api.thecatapi.com/v1/images/search', timeout=10)
-            response.raise_for_status()
+            import httpx
+            async with httpx.AsyncClient() as client:
+                response = await client.get('https://api.thecatapi.com/v1/images/search', timeout=10)
+                response.raise_for_status()
+                
+                cat_data = response.json()
+                if cat_data and len(cat_data) > 0:
+                    return cat_data[0]['url']
             
-            cat_data = response.json()
-            if cat_data and len(cat_data) > 0:
-                return cat_data[0]['url']
-            
-        except requests.RequestException as e:
+        except httpx.RequestError as e:
             logger.error(f"Ошибка получения картинки котика: {e}")
         except Exception as e:
             logger.error(f"Неожиданная ошибка при получении картинки котика: {e}")
@@ -142,7 +144,7 @@ class ReminderSystem:
             time_str = meeting_time.strftime("%H:%M")
             
             # Создаем текст напоминания
-            reminder_text = f"🔔 Встреча: {title}!\n\n"
+            reminder_text = f"🔔 {title}!\n\n"
             reminder_text += f"📅 Время: {time_str}\n"
             
             if description:
